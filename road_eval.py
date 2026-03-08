@@ -77,26 +77,27 @@ os.environ.setdefault("TRANSFORMERS_CACHE", _TRANSFORMERS_CACHE)
 
 def load_rdd2022(data_root: Path, max_samples: int, seed: int):
     """
-    RDD2022 directory structure:
-      <country>/images/train/  (or test/)
-      <country>/annotations/train/  (Pascal VOC XML)
+    RDD2022 — handles multiple layouts automatically:
+      <country>/images/train/*.jpg + <country>/annotations/train/*.xml
+      OR flat: *.jpg alongside *.xml in the same directory
+      OR any nested structure found via rglob
 
     Damage classes: D00 (longitudinal crack), D10 (transverse crack),
                     D20 (alligator crack), D40 (pothole)
     """
     items = []
-    countries = [d for d in data_root.iterdir() if d.is_dir()]
-    if not countries:
-        countries = [data_root]  # flat layout
 
-    for country_dir in sorted(countries):
-        for split in ["train", "test", "val"]:
-            img_dir = country_dir / "images" / split
-            ann_dir = country_dir / "annotations" / split
-            if not img_dir.exists():
-                continue
-            for img_path in sorted(img_dir.glob("*.jpg")):
-                xml_path = ann_dir / img_path.with_suffix(".xml").name if ann_dir.exists() else None
+    # Collect every jpg under data_root regardless of nesting
+    all_images = sorted(data_root.rglob("*.jpg")) + sorted(data_root.rglob("*.JPG"))
+
+    for img_path in all_images:
+        # Look for a matching XML in: same dir, ../annotations, ../../annotations
+        xml_candidates = [
+            img_path.with_suffix(".xml"),
+            img_path.parent.parent / "annotations" / img_path.parent.name / img_path.with_suffix(".xml").name,
+            img_path.parent.parent / "annotations" / img_path.with_suffix(".xml").name,
+        ]
+        xml_path = next((p for p in xml_candidates if p.exists()), None)
                 damage_classes = set()
                 if xml_path and xml_path.exists():
                     try:
@@ -108,37 +109,37 @@ def load_rdd2022(data_root: Path, max_samples: int, seed: int):
                     except Exception:
                         pass
 
-                has_damage = len(damage_classes) > 0
+        has_damage = len(damage_classes) > 0
 
-                # Binary question
-                items.append({
-                    "image":    img_path,
-                    "question": "Is there visible road damage in this image? Answer with yes or no only.",
-                    "answer":   "yes" if has_damage else "no",
-                    "meta":     {"country": country_dir.name, "damage": list(damage_classes)},
-                    "task":     "binary",
-                })
+        # Binary question
+        items.append({
+            "image":    img_path,
+            "question": "Is there visible road damage in this image? Answer with yes or no only.",
+            "answer":   "yes" if has_damage else "no",
+            "meta":     {"damage": list(damage_classes)},
+            "task":     "binary",
+        })
 
-                # Damage type question (only for images with annotations)
-                if has_damage:
-                    _TYPE_MAP = {
-                        "D00": "longitudinal crack",
-                        "D10": "transverse crack",
-                        "D20": "alligator crack",
-                        "D40": "pothole",
-                    }
-                    readable = [_TYPE_MAP.get(c, c) for c in sorted(damage_classes)]
-                    items.append({
-                        "image":    img_path,
-                        "question": (
-                            "What type of road damage is visible in this image? "
-                            "Choose the best answer: longitudinal crack, transverse crack, "
-                            "alligator crack, pothole, or other."
-                        ),
-                        "answer":   readable[0],   # primary damage type
-                        "meta":     {"country": country_dir.name, "all_damage": list(damage_classes)},
-                        "task":     "damage_type",
-                    })
+        # Damage type question (only for images with annotations)
+        if has_damage:
+            _TYPE_MAP = {
+                "D00": "longitudinal crack",
+                "D10": "transverse crack",
+                "D20": "alligator crack",
+                "D40": "pothole",
+            }
+            readable = [_TYPE_MAP.get(c, c) for c in sorted(damage_classes)]
+            items.append({
+                "image":    img_path,
+                "question": (
+                    "What type of road damage is visible in this image? "
+                    "Choose the best answer: longitudinal crack, transverse crack, "
+                    "alligator crack, pothole, or other."
+                ),
+                "answer":   readable[0],   # primary damage type
+                "meta":     {"all_damage": list(damage_classes)},
+                "task":     "damage_type",
+            })
 
     random.seed(seed)
     random.shuffle(items)
