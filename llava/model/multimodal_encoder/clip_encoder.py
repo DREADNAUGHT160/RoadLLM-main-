@@ -30,7 +30,29 @@ class CLIPVisionTower(nn.Module):
             rank0_print(f"The checkpoint seems to contain `vision_tower` weights: `mm_tunable_parts` contains `mm_vision_tower`.")
             self.load_model()
         else:
-            self.cfg_only = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
+            try:
+                self.cfg_only = CLIPVisionConfig.from_pretrained(
+                    self.vision_tower_name, local_files_only=True
+                )
+            except Exception:
+                # Config not in local HF cache (common in offline HPC environments).
+                # Fall back to known architecture parameters for standard CLIP variants.
+                _KNOWN = {
+                    "openai/clip-vit-large-patch14-336": dict(
+                        hidden_size=1024, image_size=336, patch_size=14,
+                        intermediate_size=4096, num_attention_heads=16, num_hidden_layers=24,
+                    ),
+                    "openai/clip-vit-large-patch14": dict(
+                        hidden_size=1024, image_size=224, patch_size=14,
+                        intermediate_size=4096, num_attention_heads=16, num_hidden_layers=24,
+                    ),
+                }
+                _params = _KNOWN.get(self.vision_tower_name, {})
+                rank0_print(
+                    f"[CLIPVisionTower] '{self.vision_tower_name}' not in local cache; "
+                    f"using {'known' if _params else 'default'} config for delay_load."
+                )
+                self.cfg_only = CLIPVisionConfig(**_params)
 
     def load_model(self, device_map=None):
         if self.is_loaded:
