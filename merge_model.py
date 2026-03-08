@@ -21,14 +21,14 @@ lmms-eval can then load it with a single path and no model_base.
 
 Usage
 -----
-# With defaults (RoadLLM 8B SigLIP checkpoint):
+# With defaults (RoadLLM 8B CLIP checkpoint from original RoadLLM repo):
 python merge_model.py
 
 # Or with explicit paths:
 python merge_model.py \\
-    --projector-path ./checkpoints/projectors/roadllm-llava-google_siglip-so400m-patch14-384-Qwen_Qwen3-8B-mlp2x_gelu-pretrain-full-4gpus-5epoches \\
-    --model-base Qwen/Qwen3-8B \\
-    --output-path ./checkpoints/merged/roadllm-full \\
+    --projector-path /home/phd_li/git_repo/RoadLLM/checkpoints/projectors/roadllm-llava-openai_clip-vit-large-patch14-336-Qwen_Qwen3-8B-mlp2x_gelu-pretrain-full-4gpus-5epoches \\
+    --model-base /home/phd_li/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218 \\
+    --output-path /home/phd_li/git_repo/RoadLLM-main-/checkpoints/merged/roadllm-full \\
     --dtype bfloat16
 """
 
@@ -47,14 +47,20 @@ if str(_REPO_ROOT) not in sys.path:
 from transformers import AutoTokenizer
 from llava.model.language_model.llava_qwen3 import LlavaQwen3Config, LlavaQwen3ForCausalLM
 
-# ── Defaults for the RoadLLM 8B SigLIP run ──────────────────────────────────
+# ── Defaults for the RoadLLM 8B CLIP run ─────────────────────────────────────
+# Projector lives in the original RoadLLM repo; this script runs from RoadLLM-main-.
+# Model base points to the local HF cache snapshot (required when HF_HUB_OFFLINE=1).
 _DEFAULT_PROJECTOR = (
-    "./checkpoints/projectors/"
-    "roadllm-llava-google_siglip-so400m-patch14-384-"
+    "/home/phd_li/git_repo/RoadLLM/checkpoints/projectors/"
+    "roadllm-llava-openai_clip-vit-large-patch14-336-"
     "Qwen_Qwen3-8B-mlp2x_gelu-pretrain-full-4gpus-5epoches"
 )
-_DEFAULT_MODEL_BASE = "Qwen/Qwen3-8B"
-_DEFAULT_OUTPUT = "./checkpoints/merged/roadllm-full"
+_DEFAULT_MODEL_BASE = (
+    "/home/phd_li/.cache/huggingface/hub/"
+    "models--Qwen--Qwen3-8B/snapshots/"
+    "b968826d9c46dd6066d109eabc6255188de91218"
+)
+_DEFAULT_OUTPUT = "/home/phd_li/git_repo/RoadLLM-main-/checkpoints/merged/roadllm-full"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

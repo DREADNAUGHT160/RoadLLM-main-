@@ -25,9 +25,11 @@
 set -euo pipefail
 
 # ── Configurable via environment variables ────────────────────────────────────
-PROJECTOR_PATH="${PROJECTOR_PATH:-./checkpoints/projectors/roadllm-llava-google_siglip-so400m-patch14-384-Qwen_Qwen3-8B-mlp2x_gelu-pretrain-full-4gpus-5epoches}"
-MODEL_BASE="${MODEL_BASE:-Qwen/Qwen3-8B}"
-MERGED_PATH="${MERGED_PATH:-./checkpoints/merged/roadllm-full}"
+# Projector lives in the original RoadLLM repo; this script runs from RoadLLM-main-.
+# MODEL_BASE uses the local HF cache snapshot path (required when HF_HUB_OFFLINE=1).
+PROJECTOR_PATH="${PROJECTOR_PATH:-/home/phd_li/git_repo/RoadLLM/checkpoints/projectors/roadllm-llava-openai_clip-vit-large-patch14-336-Qwen_Qwen3-8B-mlp2x_gelu-pretrain-full-4gpus-5epoches}"
+MODEL_BASE="${MODEL_BASE:-/home/phd_li/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218}"
+MERGED_PATH="${MERGED_PATH:-/home/phd_li/git_repo/RoadLLM-main-/checkpoints/merged/roadllm-full}"
 RESULTS_DIR="${RESULTS_DIR:-./test_results}"
 DTYPE="${DTYPE:-bfloat16}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
