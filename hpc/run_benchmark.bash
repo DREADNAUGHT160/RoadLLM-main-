@@ -5,6 +5,24 @@ IMAGE_FILE="/home/phd_li/git_repo/RoadLLM/test_images/urban.jpg" # Or change to 
 PROMPT="Describe the image"
 OUTPUT_JSON="comparison_results.json"
 
+# ---------------------------------------------------------------------------
+# NOTE: The checkpoint directories under checkpoints/projectors/ contain only
+# the trained MLP projector (mm_projector.bin) + config.json — NOT the full
+# LLM weights.  Two ways to run evaluation:
+#
+# Option A (this script) — two-path loading via evaluate_roadllm.py:
+#   Pass both --model-base (base LLM) and --model-path (projector dir).
+#   builder.py handles combining them at load time.
+#
+# Option B — merged checkpoint for lmms-eval (one-path loading):
+#   First create a self-contained checkpoint with:
+#     python scripts/merge_projector_weights.py \
+#       --projector-path ./checkpoints/projectors/<run_name> \
+#       --model-base Qwen/Qwen3-8B \
+#       --output-path ./checkpoints/merged/<run_name>-merged
+#   Then run lmms-eval pointing to --output-path (no model_base needed).
+# ---------------------------------------------------------------------------
+
 # Clear previous results
 if [ -f "$OUTPUT_JSON" ]; then
     rm "$OUTPUT_JSON"
@@ -50,7 +68,7 @@ TRANSFORMERS_CACHE=/home/phd_li/.cache/huggingface/hub HF_HUB_OFFLINE=1 python -
     --prompt "$PROMPT" \
     --output-file "$OUTPUT_JSON"
 
-# 8B Model
+# 8B Model (CLIP, Option A: two-path loading)
 echo "Running 8B Model..."
 TRANSFORMERS_CACHE=/home/phd_li/.cache/huggingface/hub HF_HUB_OFFLINE=1 python -m llava.serve.evaluate_roadllm \
     --conv-mode qwen_3 \
@@ -60,5 +78,35 @@ TRANSFORMERS_CACHE=/home/phd_li/.cache/huggingface/hub HF_HUB_OFFLINE=1 python -
     --image-file "$IMAGE_FILE" \
     --prompt "$PROMPT" \
     --output-file "$OUTPUT_JSON"
+
+# 8B SigLIP Model (Option A: two-path loading via evaluate_roadllm.py)
+# The projector dir only has mm_projector.bin; model-base supplies the LLM weights.
+echo "Running 8B SigLIP Model (two-path)..."
+TRANSFORMERS_CACHE=/home/phd_li/.cache/huggingface/hub HF_HUB_OFFLINE=1 python -m llava.serve.evaluate_roadllm \
+    --conv-mode qwen_3 \
+    --model-alias "8B-siglip" \
+    --model-base "/home/phd_li/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218" \
+    --model-path "/home/phd_li/git_repo/RoadLLM/checkpoints/projectors/roadllm-llava-google_siglip-so400m-patch14-384-Qwen_Qwen3-8B-mlp2x_gelu-pretrain-full-4gpus-5epoches" \
+    --image-file "$IMAGE_FILE" \
+    --prompt "$PROMPT" \
+    --output-file "$OUTPUT_JSON"
+
+# ---------------------------------------------------------------------------
+# Option B: lmms-eval with a merged checkpoint (one-path loading).
+#
+# Step 1 — create the merged checkpoint once:
+#   python scripts/merge_projector_weights.py \
+#     --projector-path /home/phd_li/git_repo/RoadLLM/checkpoints/projectors/roadllm-llava-google_siglip-so400m-patch14-384-Qwen_Qwen3-8B-mlp2x_gelu-pretrain-full-4gpus-5epoches \
+#     --model-base Qwen/Qwen3-8B \
+#     --output-path /home/phd_li/git_repo/RoadLLM/checkpoints/merged/roadllm-llava-qwen3-8b-siglip-merged
+#
+# Step 2 — run lmms-eval pointing at the merged dir (no model_base needed):
+#   lmms-eval \
+#     --model llava \
+#     --model_args pretrained=/home/phd_li/git_repo/RoadLLM/checkpoints/merged/roadllm-llava-qwen3-8b-siglip-merged,conv_template=qwen_3 \
+#     --tasks <your_task> \
+#     --batch_size 1 \
+#     --output_path ./lmms_results
+# ---------------------------------------------------------------------------
 
 echo "Done! Results saved to $OUTPUT_JSON"

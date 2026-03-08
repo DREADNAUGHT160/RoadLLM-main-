@@ -276,8 +276,35 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                         for k, v in overwrite_config.items():
                             setattr(llava_cfg, k, v)
                     model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
-                except:
-                    raise ValueError(f"Model {model_name} not supported")
+                except Exception:
+                    # Fallback: use AutoConfig + AutoModelForCausalLM for
+                    # checkpoint types registered via AutoConfig.register but
+                    # not matched by the name-based branches above
+                    # (e.g. model_type="llava_qwen3" in a merged checkpoint
+                    # whose directory name does not contain "qwen3").
+                    try:
+                        rank0_print(
+                            f"[builder] Name-based routing failed for '{model_name}'. "
+                            "Falling back to AutoConfig / AutoModelForCausalLM …"
+                        )
+                        auto_cfg = AutoConfig.from_pretrained(model_path)
+                        rank0_print(f"[builder] Detected model_type: {auto_cfg.model_type}")
+                        tokenizer = AutoTokenizer.from_pretrained(model_path)
+                        if overwrite_config is not None:
+                            for k, v in overwrite_config.items():
+                                setattr(auto_cfg, k, v)
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_path,
+                            config=auto_cfg,
+                            low_cpu_mem_usage=True,
+                            attn_implementation=attn_implementation,
+                            **kwargs,
+                        )
+                    except Exception as e:
+                        raise ValueError(
+                            f"Model '{model_name}' not supported. "
+                            f"AutoModel fallback also failed: {e}"
+                        )
 
     else:
         # Load language model
