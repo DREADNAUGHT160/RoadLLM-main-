@@ -37,6 +37,16 @@ import os
 import sys
 from pathlib import Path
 
+# ── Force offline mode BEFORE any HuggingFace imports ────────────────────────
+# HPC has no internet. Setting these here ensures that every from_pretrained
+# call downstream (including CLIPVisionConfig.from_pretrained inside
+# clip_encoder.py) reads from the local cache instead of attempting a network
+# request. This must happen before `import transformers` or `import llava`.
+os.environ["HF_HUB_OFFLINE"]       = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"]  = "1"
+# ─────────────────────────────────────────────────────────────────────────────
+
 import torch
 
 # ── Ensure the repo root is on sys.path so `import llava` resolves ──────────
