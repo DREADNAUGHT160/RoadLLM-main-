@@ -108,20 +108,21 @@ def merge(args: argparse.Namespace) -> None:
     print(f"  mm_hidden_size    : {getattr(config, 'mm_hidden_size', 'NOT SET')}")
     print(f"  hidden_size       : {config.hidden_size}")
 
-    # delay_load=True → LlavaMetaModel.__init__ skips downloading the vision
+    # delay_load=True → LlavaMetaModel.__init__ skips loading the vision
     # tower weights during this merge step; the tower loads lazily from
-    # HuggingFace at inference time.
+    # the local HF cache at inference time.
     config.delay_load = True
 
     # ── 3. Load base LLM with the LlavaQwen3 config ─────────────────────────
-    _banner("Step 3 / 5 — Loading base LLM (Qwen3-8B)")
-    print("  This downloads ~16 GB of weights if not already cached.\n")
+    _banner("Step 3 / 5 — Loading base LLM from local cache")
+    print(f"  Reading weights from: {args.model_base}\n")
 
     model = LlavaQwen3ForCausalLM.from_pretrained(
         args.model_base,
         config=config,
         torch_dtype=dtype,
         low_cpu_mem_usage=True,
+        local_files_only=True,
     )
     print(f"\n  Loaded : {model.__class__.__name__}")
     n_params = sum(p.numel() for p in model.parameters()) / 1e9
@@ -152,8 +153,8 @@ def merge(args: argparse.Namespace) -> None:
     # ── 5. Save merged checkpoint ────────────────────────────────────────────
     _banner("Step 5 / 5 — Saving merged checkpoint")
 
-    # Reset delay_load so the merged model rebuilds the vision tower from
-    # HuggingFace when loaded at inference time.
+    # Reset delay_load so the merged model loads the vision tower from
+    # the local HF cache at inference time.
     config.delay_load = False
     model.config.delay_load = False
 
@@ -163,7 +164,7 @@ def merge(args: argparse.Namespace) -> None:
     model.save_pretrained(args.output_path, safe_serialization=True)
 
     print(f"  Saving tokenizer from: {args.model_base}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_base)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_base, local_files_only=True)
     tokenizer.save_pretrained(args.output_path)
 
     # ── Done ─────────────────────────────────────────────────────────────────
