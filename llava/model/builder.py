@@ -221,7 +221,64 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
 
             elif "qwen" in model_name.lower() or "quyen" in model_name.lower():
-                tokenizer = AutoTokenizer.from_pretrained(model_path)
+                # ------------------------------------------------------------------
+                # Projector-only checkpoint detection
+                # Stage-1 pretraining saves only mm_projector.bin + config.json,
+                # not the full LLM weights.  When model_path points to such a dir,
+                # we resolve tokenizer + LLM weights from the cached base model and
+                # inject the projector weights afterwards.
+                # ------------------------------------------------------------------
+                _has_model_weights = (
+                    os.path.isfile(os.path.join(model_path, "pytorch_model.bin"))
+                    or os.path.isfile(os.path.join(model_path, "model.safetensors"))
+                    or any(
+                        f.startswith("model-") and f.endswith(".safetensors")
+                        for f in os.listdir(model_path)
+                        if os.path.isfile(os.path.join(model_path, f))
+                    )
+                )
+                _has_projector_bin = os.path.isfile(os.path.join(model_path, "mm_projector.bin"))
+                _projector_only = _has_projector_bin and not _has_model_weights
+
+                if _projector_only:
+                    # Read base model ID from config.json's _name_or_path field;
+                    # HuggingFace writes this automatically during training.
+                    import json as _json
+                    _base_model_id = "Qwen/Qwen3-8B"  # safe default
+                    _cfg_file = os.path.join(model_path, "config.json")
+                    if os.path.exists(_cfg_file):
+                        try:
+                            with open(_cfg_file) as _f:
+                                _base_model_id = _json.load(_f).get("_name_or_path", _base_model_id)
+                        except Exception:
+                            pass
+
+                    # Locate the cached snapshot — works fully offline with
+                    # HF_HUB_OFFLINE=1 and TRANSFORMERS_CACHE set.
+                    _hf_cache = os.environ.get(
+                        "TRANSFORMERS_CACHE",
+                        os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface/hub")),
+                    )
+                    try:
+                        from huggingface_hub import snapshot_download
+                        _tokenizer_path = snapshot_download(
+                            _base_model_id,
+                            local_files_only=True,
+                            cache_dir=_hf_cache,
+                        )
+                        rank0_print(f"[builder] Projector-only checkpoint detected.")
+                        rank0_print(f"[builder] Base model resolved from cache: {_tokenizer_path}")
+                    except Exception as _exc:
+                        rank0_print(
+                            f"[builder] WARNING: Could not resolve {_base_model_id} "
+                            f"from cache ({_exc}). "
+                            "Set TRANSFORMERS_CACHE to your HuggingFace hub cache dir."
+                        )
+                        _tokenizer_path = model_path
+                else:
+                    _tokenizer_path = model_path
+
+                tokenizer = AutoTokenizer.from_pretrained(_tokenizer_path)
                 if "moe" in model_name.lower() or "A14B" in model_name.lower():
                     from llava.model.language_model.llava_qwen_moe import LlavaQwenMoeConfig
                     if overwrite_config is not None:
@@ -236,14 +293,30 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                     print("Loading Qwen3 based Llava model...")
                     print(attn_implementation)
                     from llava.model.language_model.llava_qwen3 import LlavaQwen3Config
+                    # Config always loads from model_path: the projector checkpoint
+                    # has the correct mm_* fields (mm_vision_tower, mm_projector_type,
+                    # mm_hidden_size …).  Model WEIGHTS load from _tokenizer_path
+                    # (the full Qwen3 base model in the HF cache).
                     if overwrite_config is not None:
                         llava_cfg = LlavaQwen3Config.from_pretrained(model_path)
                         rank0_print(f"Overwriting config with {overwrite_config}")
                         for k, v in overwrite_config.items():
                             setattr(llava_cfg, k, v)
-                        model = LlavaQwen3ForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
+                        model = LlavaQwen3ForCausalLM.from_pretrained(_tokenizer_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
                     else:
-                        model = LlavaQwen3ForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
+                        model = LlavaQwen3ForCausalLM.from_pretrained(_tokenizer_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
+                    # Inject the trained projector weights into the freshly loaded
+                    # base model (only needed for projector-only checkpoints).
+                    if _projector_only:
+                        _proj_bin = os.path.join(model_path, "mm_projector.bin")
+                        rank0_print(f"[builder] Injecting mm_projector weights from {_proj_bin}")
+                        _proj_weights = torch.load(_proj_bin, map_location="cpu")
+                        if torch_dtype == "bfloat16":
+                            _proj_weights = {k: v.to(torch.bfloat16) for k, v in _proj_weights.items()}
+                        elif torch_dtype == "float16":
+                            _proj_weights = {k: v.to(torch.float16) for k, v in _proj_weights.items()}
+                        model.load_state_dict(_proj_weights, strict=False)
+                        rank0_print("[builder] mm_projector weights injected successfully.")
                 else:
                     from llava.model.language_model.llava_qwen import LlavaQwenConfig
                     if overwrite_config is not None:
