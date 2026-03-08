@@ -77,41 +77,90 @@ os.environ.setdefault("TRANSFORMERS_CACHE", _TRANSFORMERS_CACHE)
 
 def load_rdd2022(data_root: Path, max_samples: int, seed: int):
     """
-    RDD2022 — handles multiple layouts automatically:
-      <country>/images/train/*.jpg + <country>/annotations/train/*.xml
-      OR flat: *.jpg alongside *.xml in the same directory
-      OR any nested structure found via rglob
+    RDD2022 COCO layout:
+      <data_root>/
+        annotations/   ← JSON files (instances_train2017.json etc.)
+        train2017/     ← training images
+        val2017/       ← validation images
 
-    Damage classes: D00 (longitudinal crack), D10 (transverse crack),
-                    D20 (alligator crack), D40 (pothole)
+    Also handles Pascal VOC XML layout (per-image .xml files).
+
+    Damage categories: D00 longitudinal crack, D10 transverse crack,
+                       D20 alligator crack,    D40 pothole
     """
+    _TYPE_MAP = {
+        "D00": "longitudinal crack",
+        "D10": "transverse crack",
+        "D20": "alligator crack",
+        "D40": "pothole",
+    }
+
+    # ── Try COCO JSON annotations first ──────────────────────────────────────
+    ann_dir = data_root / "annotations"
+    json_files = sorted(ann_dir.glob("*.json")) if ann_dir.exists() else []
+
+    # image_id → set of damage class names
+    img_damage: dict = {}
+    # image filename → image_id
+    fname_to_id: dict = {}
+
+    for jf in json_files:
+        try:
+            with open(jf) as f:
+                coco = json.load(f)
+            # Build category id → name map
+            cat_map = {c["id"]: c["name"] for c in coco.get("categories", [])}
+            for img in coco.get("images", []):
+                fname_to_id[img["file_name"]] = img["id"]
+                img_damage.setdefault(img["id"], set())
+            for ann in coco.get("annotations", []):
+                iid = ann["image_id"]
+                cname = cat_map.get(ann["category_id"], "")
+                if cname:
+                    img_damage.setdefault(iid, set()).add(cname)
+        except Exception:
+            pass
+
+    # ── Collect all images ────────────────────────────────────────────────────
+    img_dirs = [data_root / "train2017", data_root / "val2017"]
+    # Fall back to searching entire tree if the expected dirs don't exist
+    if not any(d.exists() for d in img_dirs):
+        all_images = sorted(data_root.rglob("*.jpg")) + sorted(data_root.rglob("*.JPG"))
+    else:
+        all_images = []
+        for d in img_dirs:
+            if d.exists():
+                all_images += sorted(d.glob("*.jpg")) + sorted(d.glob("*.JPG"))
+
     items = []
-
-    # Collect every jpg under data_root regardless of nesting
-    all_images = sorted(data_root.rglob("*.jpg")) + sorted(data_root.rglob("*.JPG"))
-
     for img_path in all_images:
-        # Look for a matching XML in: same dir, ../annotations, ../../annotations
-        xml_candidates = [
-            img_path.with_suffix(".xml"),
-            img_path.parent.parent / "annotations" / img_path.parent.name / img_path.with_suffix(".xml").name,
-            img_path.parent.parent / "annotations" / img_path.with_suffix(".xml").name,
-        ]
-        xml_path = next((p for p in xml_candidates if p.exists()), None)
-                damage_classes = set()
-                if xml_path and xml_path.exists():
-                    try:
-                        tree = ET.parse(xml_path)
-                        for obj in tree.findall(".//object"):
-                            name = obj.findtext("name", "").strip()
-                            if name:
-                                damage_classes.add(name)
-                    except Exception:
-                        pass
+        # ── Get damage labels ─────────────────────────────────────────────────
+        damage_classes: set = set()
+
+        # 1. COCO JSON
+        iid = fname_to_id.get(img_path.name)
+        if iid is not None:
+            damage_classes = img_damage.get(iid, set())
+        else:
+            # 2. Fall back to Pascal VOC XML (same dir or annotations/)
+            xml_candidates = [
+                img_path.with_suffix(".xml"),
+                ann_dir / img_path.with_suffix(".xml").name,
+            ]
+            xml_path = next((p for p in xml_candidates if p.exists()), None)
+            if xml_path:
+                try:
+                    tree = ET.parse(xml_path)
+                    for obj in tree.findall(".//object"):
+                        name = obj.findtext("name", "").strip()
+                        if name:
+                            damage_classes.add(name)
+                except Exception:
+                    pass
 
         has_damage = len(damage_classes) > 0
 
-        # Binary question
+        # Binary yes/no
         items.append({
             "image":    img_path,
             "question": "Is there visible road damage in this image? Answer with yes or no only.",
@@ -120,14 +169,8 @@ def load_rdd2022(data_root: Path, max_samples: int, seed: int):
             "task":     "binary",
         })
 
-        # Damage type question (only for images with annotations)
+        # Damage type (only when we have labels)
         if has_damage:
-            _TYPE_MAP = {
-                "D00": "longitudinal crack",
-                "D10": "transverse crack",
-                "D20": "alligator crack",
-                "D40": "pothole",
-            }
             readable = [_TYPE_MAP.get(c, c) for c in sorted(damage_classes)]
             items.append({
                 "image":    img_path,
@@ -136,7 +179,7 @@ def load_rdd2022(data_root: Path, max_samples: int, seed: int):
                     "Choose the best answer: longitudinal crack, transverse crack, "
                     "alligator crack, pothole, or other."
                 ),
-                "answer":   readable[0],   # primary damage type
+                "answer":   readable[0],
                 "meta":     {"all_damage": list(damage_classes)},
                 "task":     "damage_type",
             })
